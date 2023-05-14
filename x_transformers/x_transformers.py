@@ -1062,6 +1062,7 @@ class AttentionLayers(nn.Module):
     def forward(
         self,
         x,
+        y,
         context = None,
         mask = None,
         context_mask = None,
@@ -1088,6 +1089,7 @@ class AttentionLayers(nn.Module):
 
         for ind, (layer_type, (norm, block, residual_fn), layer_dropout) in enumerate(zip(self.layer_types, self.layers, self.layer_dropouts)):
             is_last = ind == (len(self.layers) - 1)
+            x += y
 
             if self.training and layer_dropout > 0. and random() < layer_dropout:
                 continue
