@@ -14,7 +14,7 @@ from typing import List
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 
-from x_transformers.attend import Attend, Intermediates
+from x_transformers.attend import Attend, Intermediates, CascadingHeads
 from x_transformers.autoregressive_wrapper import AutoregressiveWrapper
 
 # constants
@@ -358,7 +358,7 @@ class AlibiPositionalBias(nn.Module):
     def forward(self, i, j):
         h, device = self.total_heads, self.device
 
-        if exists(self.bias) and self.bias.shape[-1] >= j:
+        if exists(self.bias) and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
             return self.bias[..., :i, :j]
 
         bias = self.get_bias(i, j, device)
@@ -377,12 +377,12 @@ class LearnedAlibiPositionalBias(AlibiPositionalBias):
         self.learned_logslopes = nn.Parameter(log_slopes)
 
     def forward(self, i, j):
-        h, i, j, device = self.heads, self.device
+        h, device = self.heads, self.device
 
         def get_slopes(param):
             return pad_at_dim(param.exp(), (0, h - param.shape[0]), dim = -2)
 
-        if exists(self.bias) and self.bias.shape[-1] >= j:
+        if exists(self.bias) and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
             bias = self.bias[..., :i, :j]
         else:
             bias = self.get_bias(i, j, device)
@@ -622,7 +622,8 @@ class Attention(nn.Module):
         one_kv_head = False,
         shared_kv = False,
         value_dim_head = None,
-        tensor_product = False   # https://arxiv.org/abs/2208.06061
+        tensor_product = False,   # https://arxiv.org/abs/2208.06061
+        cascading_heads = False
     ):
         super().__init__()
         self.scale = dim_head ** -0.5
@@ -685,6 +686,10 @@ class Attention(nn.Module):
             scale = qk_norm_scale if qk_norm else self.scale,
             flash = flash
         )
+
+        if cascading_heads:
+            # cascading heads - wrap the Attend logic
+            self.attend = CascadingHeads(self.attend)
 
         # head scaling
         self.head_scale = head_scale
@@ -889,6 +894,7 @@ class AttentionLayers(nn.Module):
         cross_residual_attn = False,
         macaron = False,
         pre_norm = True,
+        pre_norm_has_final_norm = True,
         gate_residual = False,
         scale_residual = False,
         scale_residual_constant = 1.,
@@ -896,6 +902,7 @@ class AttentionLayers(nn.Module):
         shift_tokens = 0,
         sandwich_norm = False,
         resi_dual = False,
+        resi_dual_scale = 1.,
         zero_init_branch_output = False,
         layer_dropout = 0.,
         cross_attn_tokens_dropout = 0.,
@@ -951,13 +958,21 @@ class AttentionLayers(nn.Module):
 
         assert (int(sandwich_norm) + int(resi_dual)) <= 1, 'either sandwich norm or resiDual is selected, but not both'
         assert not (not pre_norm and sandwich_norm), 'sandwich norm cannot be used when not using prenorm'
-        assert not (not pre_norm and resi_dual), 'resiDualcannot be used when not using prenorm'
+
+        if resi_dual:
+            pre_norm = False
+
         self.pre_norm = pre_norm
         self.sandwich_norm = sandwich_norm
+
         self.resi_dual = resi_dual
+        assert 0 < resi_dual_scale <= 1., 'resiDual prenorm residual must be scaled by a factor greater than 0 and less than or equal to 1.'
+        self.resi_dual_scale = resi_dual_scale
 
         self.residual_attn = residual_attn
         self.cross_residual_attn = cross_residual_attn
+        assert not (flash_attn and (residual_attn or cross_residual_attn)), 'flash attention is not compatible with residual attention'
+
         self.cross_attend = cross_attend
 
         norm_class = ScaleNorm if use_scalenorm else nn.LayerNorm
@@ -1016,6 +1031,10 @@ class AttentionLayers(nn.Module):
 
         shift_tokens = cast_tuple(shift_tokens, len(layer_types))
 
+        # whether it has post norm
+
+        self.final_norm = norm_fn() if pre_norm or resi_dual else nn.Identity()
+
         # iterate and construct layers
 
         for ind, (layer_type, layer_shift_tokens) in enumerate(zip(self.layer_types, shift_tokens)):
@@ -1041,7 +1060,7 @@ class AttentionLayers(nn.Module):
 
             pre_branch_norm = norm_fn() if pre_norm else None
             post_branch_norm = norm_fn() if sandwich_norm else None
-            post_main_norm = norm_fn() if (resi_dual or not pre_norm) and not is_last_layer else None
+            post_main_norm = norm_fn() if not pre_norm else None
 
             norms = nn.ModuleList([
                 pre_branch_norm,
@@ -1085,7 +1104,7 @@ class AttentionLayers(nn.Module):
             max_rotary_emb_length = max(list(map(lambda m: (m.shape[1] if exists(m) else 0) + x.shape[1], mems)))
             rotary_pos_emb = self.rotary_pos_emb(max_rotary_emb_length, x.device)
 
-        outer_residual = x
+        outer_residual = x * self.resi_dual_scale
 
         for ind, (layer_type, (norm, block, residual_fn), layer_dropout) in enumerate(zip(self.layer_types, self.layers, self.layer_dropouts)):
             is_last = ind == (len(self.layers) - 1)
@@ -1107,7 +1126,7 @@ class AttentionLayers(nn.Module):
 
             pre_norm, post_branch_norm, post_main_norm = norm
 
-            if exists(pre_norm) and not self.resi_dual:
+            if exists(pre_norm):
                 x = pre_norm(x)
 
             if layer_type == 'a':
@@ -1118,7 +1137,7 @@ class AttentionLayers(nn.Module):
                 out = block(x)
 
             if self.resi_dual:
-                outer_residual = residual_fn(out, outer_residual)
+                outer_residual = outer_residual + out * self.resi_dual_scale
 
             if exists(post_branch_norm):
                 out = post_branch_norm(out)
@@ -1136,8 +1155,10 @@ class AttentionLayers(nn.Module):
             if exists(post_main_norm):
                 x = post_main_norm(x)
 
-            if self.resi_dual:
-                x = x + pre_norm(outer_residual)
+        if self.resi_dual:
+            x = x + self.final_norm(outer_residual)
+        else:
+            x = self.final_norm(x)
 
         if return_hiddens:
             intermediates = LayerIntermediates(
@@ -1185,7 +1206,7 @@ class ViTransformerWrapper(nn.Module):
 
         self.patch_size = patch_size
 
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
+        self.pos_embedding = nn.Parameter(torch.randn(1, num_patches, dim))
 
         self.patch_to_embedding = nn.Sequential(
             nn.LayerNorm(patch_dim),
@@ -1197,7 +1218,7 @@ class ViTransformerWrapper(nn.Module):
         self.dropout = nn.Dropout(emb_dropout)
 
         self.attn_layers = attn_layers
-        self.norm = nn.LayerNorm(dim)
+
         self.mlp_head = nn.Linear(dim, num_classes) if exists(num_classes) else nn.Identity()
 
     def forward(
@@ -1217,7 +1238,6 @@ class ViTransformerWrapper(nn.Module):
         x = self.dropout(x)
 
         x = self.attn_layers(x)
-        x = self.norm(x)
 
         if not exists(self.mlp_head) or return_embeddings:
             return x
@@ -1274,12 +1294,11 @@ class TransformerWrapper(nn.Module):
 
         self.project_emb = nn.Linear(emb_dim, dim) if emb_dim != dim else nn.Identity()
         self.attn_layers = attn_layers
-        self.norm = nn.LayerNorm(dim)
 
         self.init_()
 
         logits_dim = default(logits_dim, num_tokens)
-        self.to_logits = nn.Linear(dim, logits_dim) if not tie_embedding else lambda t: t @ self.token_emb.weight.t()
+        self.to_logits = nn.Linear(dim, logits_dim) if not tie_embedding else lambda t: t @ self.token_emb.emb.weight.t()
 
         # memory tokens (like [cls]) from Memory Transformers paper
         num_memory_tokens = default(num_memory_tokens, 0)
@@ -1366,8 +1385,6 @@ class TransformerWrapper(nn.Module):
         else:
             x = self.attn_layers(x, mask = mask, mems = mems, **kwargs)
 
-        x = self.norm(x)
-
         mem, x = x[:, :num_mem], x[:, num_mem:]
 
         if return_logits_and_embeddings:
@@ -1426,7 +1443,6 @@ class ContinuousTransformerWrapper(nn.Module):
         self.project_in = nn.Linear(dim_in, dim) if exists(dim_in) else nn.Identity()
 
         self.attn_layers = attn_layers
-        self.norm = nn.LayerNorm(dim)
 
         self.project_out = nn.Linear(dim, dim_out) if exists(dim_out) else nn.Identity()
 
@@ -1458,7 +1474,6 @@ class ContinuousTransformerWrapper(nn.Module):
         x = self.emb_dropout(x)
 
         x, intermediates = self.attn_layers(x, mask = mask, mems = mems, return_hiddens = True, **kwargs)
-        x = self.norm(x)
 
         out = self.project_out(x) if not return_embeddings else x
 
