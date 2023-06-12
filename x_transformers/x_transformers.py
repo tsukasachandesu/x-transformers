@@ -1108,7 +1108,7 @@ class AttentionLayers(nn.Module):
 
         for ind, (layer_type, (norm, block, residual_fn), layer_dropout) in enumerate(zip(self.layer_types, self.layers, self.layer_dropouts)):
             is_last = ind == (len(self.layers) - 1)
-            x += y
+            
 
             if self.training and layer_dropout > 0. and random() < layer_dropout:
                 continue
@@ -1130,6 +1130,7 @@ class AttentionLayers(nn.Module):
                 x = pre_norm(x)
 
             if layer_type == 'a':
+                x += y
                 out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
