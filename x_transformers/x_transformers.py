@@ -17,7 +17,6 @@ from einops.layers.torch import Rearrange
 from x_transformers.attend import Attend, Intermediates, CascadingHeads
 from x_transformers.autoregressive_wrapper import AutoregressiveWrapper
 
-import deepspeed
 # constants
 
 DEFAULT_DIM_HEAD = 64
@@ -1040,8 +1039,6 @@ class AttentionLayers(nn.Module):
         # iterate and construct layers
 
         
-        self.ffff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=FeedForward(dim, **ff_kwargs),num_experts=2,ep_size=1)
-
         for ind, (layer_type, layer_shift_tokens) in enumerate(zip(self.layer_types, shift_tokens)):
             is_last_layer = ind == (len(self.layer_types) - 1)
 
@@ -1141,8 +1138,7 @@ class AttentionLayers(nn.Module):
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
-
-                out,_,_ = self.ffff(x)
+                out = block(x)
 
             if self.resi_dual:
                 outer_residual = outer_residual + out * self.resi_dual_scale
