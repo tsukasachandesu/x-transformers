@@ -594,8 +594,12 @@ class FeedForward(nn.Module):
         if zero_init_output:
             init_zero_(self.ff[-1])
 
+        self.fff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=self.ff,num_experts=8,ep_size=1)
+
+
     def forward(self, x):
-        return self.ff(x)
+        out, _, _ = self.fff(x)
+        return out
 
 # attention. it is all we need
 
@@ -1046,7 +1050,7 @@ class AttentionLayers(nn.Module):
             elif layer_type == 'c':
                 layer = Attention(dim, heads = heads, **attn_kwargs)
             elif layer_type == 'f':
-                layer, _, _ = deepspeed.moe.layer.MoE(hidden_size=dim,expert=FeedForward(dim, **ff_kwargs),num_experts=8,ep_size=1)
+                layer = FeedForward(dim, **ff_kwargs)
                 layer = layer if not macaron else Scale(0.5, layer)
             else:
                 raise Exception(f'invalid layer type {layer_type}')
@@ -1137,6 +1141,7 @@ class AttentionLayers(nn.Module):
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
+
                 out = block(x)
 
             if self.resi_dual:
