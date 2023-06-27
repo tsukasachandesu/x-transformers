@@ -594,12 +594,9 @@ class FeedForward(nn.Module):
         if zero_init_output:
             init_zero_(self.ff[-1])
 
-        self.fff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=self.ff,num_experts=2,ep_size=1)
-
 
     def forward(self, x):
-        out, _, _ = self.fff(x)
-        return out
+        return self.ff(x)
 
 # attention. it is all we need
 
