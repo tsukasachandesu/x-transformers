@@ -594,7 +594,7 @@ class FeedForward(nn.Module):
         if zero_init_output:
             init_zero_(self.ff[-1])
 
-        self.fff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=self.ff,num_experts=8,ep_size=1)
+        self.fff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=self.ff,num_experts=2,ep_size=1)
 
 
     def forward(self, x):
@@ -1042,6 +1042,9 @@ class AttentionLayers(nn.Module):
 
         # iterate and construct layers
 
+        
+        self.ffff = deepspeed.moe.layer.MoE(hidden_size=dim,expert=FeedForward(dim, **ff_kwargs),num_experts=2,ep_size=1)
+
         for ind, (layer_type, layer_shift_tokens) in enumerate(zip(self.layer_types, shift_tokens)):
             is_last_layer = ind == (len(self.layer_types) - 1)
 
@@ -1142,7 +1145,7 @@ class AttentionLayers(nn.Module):
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
 
-                out = block(x)
+                out,_,_ = self.ffff(x)
 
             if self.resi_dual:
                 outer_residual = outer_residual + out * self.resi_dual_scale
