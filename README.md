@@ -1208,7 +1208,9 @@ Update: Google Brain has proven out something similar to cosine sim attention in
 
 We are nearing the point of wiping out a source of transformer training instability with one simple intervention, in my opinion. The only slight difference in the paper is that they still have a learned scale across the feature dimension (per use of rmsnorm). Not sure how critical this is, but just to make sure we don't miss anything, I will include this here. You can use this by setting `qk_norm_dim_scale = True`
 
-<a href="https://twitter.com/Tim_Dettmers/status/1625531080513306627">Counterpoint from Tim Dettmers</a>
+Update: <a href="https://twitter.com/Tim_Dettmers/status/1625531080513306627">Counterpoint from Tim Dettmers</a>
+
+Update 2: <a href="https://arxiv.org/abs/2305.19268">Counter</a> to Tim's assertion that outliers are needed, and potentially even <a href="https://arxiv.org/abs/2306.12929">some solutions</a>
 
 ```python
 import torch
@@ -1235,6 +1237,8 @@ model(x)
 A number of papers have hinted that causal transformers (`Decoder`) can learn absolute positions in the absence of added embeddings of any sort. This was recently thoroughly investigated <a href="https://arxiv.org/abs/2203.16634">here</a>. You can turn off the absolute positional embedding by setting `use_abs_pos_emb = False` in the `TransformerWrapper`
 
 Given <a href="https://ai.googleblog.com/2022/04/pathways-language-model-palm-scaling-to.html">PaLM</a>, the trend going forward may be to forgo absolute positional embedding (again, for causal transformers only), and add relative positional embeddings with RoPE, ALiBi, etc.
+
+Update: <a href="https://arxiv.org/abs/2305.19466">This paper</a> shows that in the absence of any engineered absolute or relative positional embeddings, decoders can generate implicit positions, and even length generalize better than solutions of the past. They were unaware of dynamic positional bias, however.
 
 ```python
 import torch
@@ -1633,6 +1637,14 @@ generated = model.generate(start_emb, 17) # (17, 777)
 ```
 
 ```bibtex
+@inproceedings{Chen2023ExtendingCW,
+    title   = {Extending Context Window of Large Language Models via Positional Interpolation},
+    author  = {Shouyuan Chen and Sherman Wong and Liangjian Chen and Yuandong Tian},
+    year    = {2023}
+}
+```
+
+```bibtex
 @inproceedings{Sun2022ALT,
   title     = {A Length-Extrapolatable Transformer},
   author    = {Yutao Sun and Li Dong and Barun Patra and Shuming Ma and Shaohan Huang and Alon Benhaim and Vishrav Chaudhary and Xia Song and Furu Wei},
@@ -1892,6 +1904,16 @@ generated = model.generate(start_emb, 17) # (17, 777)
     journal = {ArXiv},
     year    = {2023},
     volume  = {abs/2305.07027}
+}
+```
+
+```bibtex
+@article{Kazemnejad2023TheIO,
+    title   = {The Impact of Positional Encoding on Length Generalization in Transformers},
+    author  = {Amirhossein Kazemnejad and Inkit Padhi and Karthikeyan Natesan Ramamurthy and Payel Das and Siva Reddy},
+    journal = {ArXiv},
+    year    = {2023},
+    volume  = {abs/2305.19466}
 }
 ```
 

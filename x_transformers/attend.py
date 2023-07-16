@@ -48,6 +48,18 @@ def once(fn):
 
 print_once = once(print)
 
+# functions for creating causal mask
+# need a special one for onnx cpu (no support for .triu)
+
+def create_causal_mask(i, j, device):
+    return torch.ones((i, j), device = device, dtype = torch.bool).triu(j - i + 1)
+
+def onnx_create_causal_mask(i, j, device):
+    r = torch.arange(i, device = device)
+    causal_mask = rearrange(r, 'i -> i 1') < rearrange(r, 'j -> 1 j')
+    causal_mask = F.pad(causal_mask, (j - i, 0), value = False)
+    return causal_mask
+
 # main class
 
 class Attend(nn.Module):
@@ -61,11 +73,15 @@ class Attend(nn.Module):
         scale = None,
         qk_norm = False,
         flash = False,
+        onnxable = False
     ):
         super().__init__()
         self.scale = scale
         self.qk_norm = qk_norm
+
         self.causal = causal
+        self.create_causal_mask = onnx_create_causal_mask if onnxable else create_causal_mask
+
         self.attn_fn = partial(F.softmax, dtype = torch.float32) if not qk_norm else F.softmax
 
         self.dropout = dropout
@@ -137,15 +153,15 @@ class Attend(nn.Module):
             # manually handle causal mask, if another mask was given
 
             if causal:
-                causal_mask = torch.ones((q_len, k_len), dtype = torch.bool, device = device).triu(k_len - q_len + 1)
-                mask = mask | causal_mask
+                causal_mask = self.create_causal_mask(q_len, k_len, device = device)
+                mask = mask & ~causal_mask
                 causal = False
 
         # handle alibi positional bias
         # convert from bool to float
 
         if exists(attn_bias):
-            attn_bias = rearrange(attn_bias, 'h i j -> 1 h i j').expand(batch, -1, -1, -1)
+            attn_bias = rearrange(attn_bias, 'h i j -> 1 h i j').expand(batch, heads, -1, -1)
 
             # if mask given, the mask would already contain the causal mask from above logic
             # otherwise, if no mask given but still causal, mask out alibi positional bias to a large negative number
@@ -153,9 +169,9 @@ class Attend(nn.Module):
             mask_value = -torch.finfo(q.dtype).max
 
             if exists(mask):
-                attn_bias = attn_bias.masked_fill(mask, mask_value // 2)
+                attn_bias = attn_bias.masked_fill(~mask, mask_value // 2)
             elif causal:
-                causal_mask = torch.ones((q_len, k_len), dtype = torch.bool, device = device).triu(k_len - q_len + 1)
+                causal_mask = self.create_causal_mask(q_len, k_len, device = device)
                 attn_bias = attn_bias.masked_fill(causal_mask, mask_value // 2)
                 causal = False
 
@@ -224,11 +240,11 @@ class Attend(nn.Module):
         mask_value = -torch.finfo(dots.dtype).max
 
         if exists(mask):
-            dots = dots.masked_fill(mask, mask_value)
+            dots = dots.masked_fill(~mask, mask_value)
 
         if self.causal:
             i, j = dots.shape[-2:]
-            causal_mask = torch.ones((i, j), dtype = torch.bool, device = device).triu(j - i + 1)
+            causal_mask = self.create_causal_mask(i, j, device = device)
             dots = dots.masked_fill(causal_mask, mask_value)
 
         attn = self.attn_fn(dots, dim = -1)
