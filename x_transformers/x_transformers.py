@@ -1119,7 +1119,8 @@ class AttentionLayers(nn.Module):
         attn_mask = None,
         self_attn_context_mask = None,
         mems = None,
-        return_hiddens = False
+        return_hiddens = False,
+        bar
     ):
         assert not (self.cross_attend ^ exists(context)), 'context must be passed in if cross_attend is set to True'
 
@@ -1163,7 +1164,7 @@ class AttentionLayers(nn.Module):
             if layer_type == 'a':
                 if y != None:
                     x += y
-                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem)
+                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem, bar)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
