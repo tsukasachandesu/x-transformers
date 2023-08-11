@@ -847,7 +847,7 @@ class Attention(nn.Module):
 
         attn_bias = None
         if exists(rel_pos):
-            attn_bias = rel_pos(z, z)
+            attn_bias = rel_pos(i, j)
 
         # attention is all we need
 
