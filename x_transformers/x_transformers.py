@@ -426,7 +426,9 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self, seq_len, device):
         t = seq_len.type_as(self.inv_freq)
+        print(t.shape)
         t = t / self.interpolation_factor
+        print(t.shape)
 
         freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
         freqs = torch.cat((freqs, freqs), dim = -1)
@@ -1130,12 +1132,13 @@ class AttentionLayers(nn.Module):
         prev_cross_attn = None
 
         mems = mems.copy() if exists(mems) else [None] * self.num_attn_layers
+        print(bar.shape)
 
         rotary_pos_emb = None
         if exists(self.rotary_pos_emb):
             max_rotary_emb_length = max(list(map(lambda m: (m.shape[1] if exists(m) else 0) + x.shape[1], mems)))
             rotary_pos_emb = self.rotary_pos_emb(bar, x.device)
-
+        print(bar.shape)
         outer_residual = x * self.resi_dual_scale
 
         for ind, (layer_type, (norm, block, residual_fn), layer_dropout) in enumerate(zip(self.layer_types, self.layers, self.layer_dropouts)):
