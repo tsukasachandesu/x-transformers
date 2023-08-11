@@ -425,7 +425,7 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer('scale', scale)
 
     def forward(self, seq_len, device):
-        t = torch.arange(seq_len, device = device).type_as(self.inv_freq)
+        t = seq_len.type_as(self.inv_freq)
         t = t / self.interpolation_factor
 
         freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
