@@ -260,9 +260,15 @@ class RelativePositionBias(nn.Module):
         return next(self.parameters()).device
 
     def forward(self, i, j):
+        print(i.shape)
+        print(j.shape)
+
         device = self.device
         q_pos = torch.arange(j - i, j, dtype = torch.long, device = device)
         k_pos = torch.arange(j, dtype = torch.long, device = device)
+
+        print(q_pos.shape)
+        print(k_pos.shape) 
         rel_pos = k_pos[None, :] - q_pos[:, None]
         rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
         values = self.relative_attention_bias(rp_bucket)
@@ -425,14 +431,10 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer('scale', scale)
 
     def forward(self, seq_len, device):
-        print(seq_len)
         t = torch.arange(seq_len, device = device).type_as(self.inv_freq)
-        print(t.shape)
         t = t / self.interpolation_factor
-        print(t.shape)
 
         freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
-        print(freqs.shape)
 
         freqs = torch.cat((freqs, freqs), dim = -1)
 
