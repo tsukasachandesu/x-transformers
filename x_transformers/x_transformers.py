@@ -264,10 +264,10 @@ class RelativePositionBias(nn.Module):
         q_pos = i
         k_pos = j
 
-        rel_pos = k_pos[None, :] - q_pos[:, None]
+        rel_pos = k_pos[:,None, :] - q_pos[:,:, None]
         print(rel_pos.shape)
         
-        rp_bucket = self._relative_position_bucket(rel_pos[0,:], causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
+        rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
 
         print(rp_bucket.shape)
 
