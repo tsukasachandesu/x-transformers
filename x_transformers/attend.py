@@ -247,7 +247,7 @@ class Attend(nn.Module):
             dots = dots + prev_attn
 
         qk_similarities = dots.clone()
-        print("a")
+        
         if self.talking_heads:
             dots = self.pre_softmax_talking_heads(dots)
 
