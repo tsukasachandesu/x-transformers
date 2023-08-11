@@ -1113,7 +1113,7 @@ class AttentionLayers(nn.Module):
 
     def forward(
         self,
-        x,z,
+        x,z=None,
         y = None,
         context = None,
         mask = None,
