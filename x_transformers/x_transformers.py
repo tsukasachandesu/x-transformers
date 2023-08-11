@@ -261,13 +261,17 @@ class RelativePositionBias(nn.Module):
 
     def forward(self, i, j):
         device = self.device
-        q_pos = torch.arange(j - i, j, dtype = torch.long, device = device)
-        k_pos = torch.arange(j, dtype = torch.long, device = device)
+        print(i.shape)
+        q_pos = i
+        k_pos = j
 
         rel_pos = k_pos[None, :] - q_pos[:, None]
         rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
+        print(rp_bucket.shape)
         values = self.relative_attention_bias(rp_bucket)
-        bias = rearrange(values, 'i j h -> h i j')
+        print(values.shape)
+
+        bias = rearrange(values, 'b i j h ->b h i j')
 
         return bias * self.scale
 
@@ -743,7 +747,7 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x,
+        x,z = None,
         context = None,
         mask = None,
         context_mask = None,
@@ -842,7 +846,7 @@ class Attention(nn.Module):
 
         attn_bias = None
         if exists(rel_pos):
-            attn_bias = rel_pos(i, j)
+            attn_bias = rel_pos(z, z)
 
         # attention is all we need
 
@@ -1114,7 +1118,7 @@ class AttentionLayers(nn.Module):
 
     def forward(
         self,
-        x,
+        x,z =None,
         y = None,
         context = None,
         mask = None,
@@ -1164,7 +1168,7 @@ class AttentionLayers(nn.Module):
             if layer_type == 'a':
                 if y != None:
                     x += y
-                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem)
+                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem,z)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
