@@ -178,8 +178,7 @@ class Attend(nn.Module):
             # otherwise, if no mask given but still causal, mask out alibi positional bias to a large negative number
 
             mask_value = -torch.finfo(q.dtype).max
-            print(attn_bias.shape)
-            print("a")
+
             if exists(mask):
                 attn_bias = attn_bias.masked_fill(~mask, mask_value // 2)
             elif causal:
@@ -248,11 +247,10 @@ class Attend(nn.Module):
             dots = dots + prev_attn
 
         qk_similarities = dots.clone()
-
+        print("a")
         if self.talking_heads:
             dots = self.pre_softmax_talking_heads(dots)
-        print(attn_bias.shape)
-        print("b")
+
         if exists(attn_bias):
             dots = dots + attn_bias
 
