@@ -261,15 +261,13 @@ class RelativePositionBias(nn.Module):
 
     def forward(self, i, j):
         device = self.device
-        print(i.shape)
         q_pos = i
         k_pos = j
 
         rel_pos = k_pos[None, :] - q_pos[:, None]
-        rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
         print(rp_bucket.shape)
+        rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
         values = self.relative_attention_bias(rp_bucket)
-        print(values.shape)
 
         bias = rearrange(values, 'b i j h ->b h i j')
 
