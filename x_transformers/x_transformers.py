@@ -399,10 +399,17 @@ class RotaryEmbedding(nn.Module):
         dim,
         use_xpos = False,
         scale_base = 512,
-        interpolation_factor = 1.
+        interpolation_factor = 1.,
+        base = 10000,
+        base_rescale_factor = 1.
     ):
         super().__init__()
-        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        # proposed by reddit user bloc97, to rescale rotary embeddings to longer sequence length without fine-tuning
+        # has some connection to NTK literature
+        # https://www.reddit.com/r/LocalLLaMA/comments/14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/
+        base *= base_rescale_factor ** (dim / (dim - 2))
+
+        inv_freq = 1. / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
 
         assert interpolation_factor >= 1.
@@ -472,15 +479,21 @@ class ScaleNorm(nn.Module):
         return x / norm.clamp(min = self.eps) * self.g
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim, eps = 1e-8):
+    def __init__(self, dim):
         super().__init__()
-        self.scale = dim ** -0.5
-        self.eps = eps
+        self.scale = dim ** 0.5
         self.g = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        norm = torch.norm(x, dim = -1, keepdim = True) * self.scale
-        return x / norm.clamp(min = self.eps) * self.g
+        return F.normalize(x, dim = -1) * self.scale * self.g
+
+class SimpleRMSNorm(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.scale = dim ** 0.5
+
+    def forward(self, x):
+        return F.normalize(x, dim = -1) * self.scale
 
 # residual and residual gates
 
@@ -631,6 +644,7 @@ class Attention(nn.Module):
         value_dim_head = None,
         tensor_product = False,   # https://arxiv.org/abs/2208.06061
         cascading_heads = False,
+        add_zero_kv = False,      # same as add_zero_attn in pytorch
         onnxable = False
     ):
         super().__init__()
@@ -690,8 +704,10 @@ class Attention(nn.Module):
             causal = causal,
             talking_heads = talking_heads,
             dropout = dropout,
+            sparse_topk = sparse_topk,
             qk_norm = qk_norm,
             scale = qk_norm_scale if qk_norm else self.scale,
+            add_zero_kv = add_zero_kv,
             flash = flash,
             onnxable = onnxable
         )
@@ -774,7 +790,7 @@ class Attention(nn.Module):
             ql, kl, vl = map(lambda arg: apply_rotary_pos_emb(arg[0], freqs, arg[1]), ((ql, q_xpos_scale), (kl, k_xpos_scale), (vl, k_xpos_scale)))
             q, k, v = map(lambda t: torch.cat(t, dim = -1), ((ql, qr), (kl, kr), (vl, vr)))
 
-        input_mask = default(context_mask, mask)
+        input_mask = context_mask if has_context else mask
 
         if self.num_mem_kv > 0:
             mem_k, mem_v = map(lambda t: repeat(t, 'h n d -> b h n d', b = b), (self.mem_k, self.mem_v))
@@ -788,7 +804,6 @@ class Attention(nn.Module):
 
             if exists(input_mask):
                 input_mask = pad_at_dim(input_mask, (self.num_mem_kv, 0), dim = -1, value = True)
-
 
         i, j = map(lambda t: t.shape[-2], (q, k))
 
@@ -816,12 +831,6 @@ class Attention(nn.Module):
             dist = rearrange(range_q, 'i -> 1 1 i 1') - rearrange(range_k, 'j -> 1 1 1 j')
             max_attend_past_mask = dist > self.max_attend_past
             masks.append(max_attend_past_mask)
-
-        if exists(self.sparse_topk) and self.sparse_topk < dots.shape[-1]:
-            top, _ = dots.topk(self.sparse_topk, dim = -1)
-            vk = rearrange(top[..., -1], '... -> ... 1')
-            sparse_topk_mask = dots < vk
-            masks.append(sparse_topk_mask)
 
         if len(masks) > 0:
             final_attn_mask = ~or_reduce(masks)
@@ -882,6 +891,7 @@ class AttentionLayers(nn.Module):
         only_cross = False,
         use_scalenorm = False,
         use_rmsnorm = False,
+        use_simple_rmsnorm = False,
         alibi_pos_bias = False,
         alibi_num_heads = None,
         alibi_learned = False,
@@ -897,6 +907,7 @@ class AttentionLayers(nn.Module):
         rotary_xpos = False,
         rotary_interpolation_factor = 1.,
         rotary_xpos_scale_base = 512,
+        rotary_base_rescale_factor = 1.,
         custom_layers = None,
         sandwich_coef = None,
         par_ratio = None,
@@ -935,7 +946,7 @@ class AttentionLayers(nn.Module):
         rotary_emb_dim = max(default(rotary_emb_dim, dim_head // 2), 32)
 
         assert not (rotary_xpos and not causal), 'rotary xpos is not compatible with bidirectional attention'
-        self.rotary_pos_emb = RotaryEmbedding(rotary_emb_dim, use_xpos = rotary_xpos, scale_base = rotary_xpos_scale_base, interpolation_factor = rotary_interpolation_factor) if rotary_pos_emb else None
+        self.rotary_pos_emb = RotaryEmbedding(rotary_emb_dim, use_xpos = rotary_xpos, scale_base = rotary_xpos_scale_base, interpolation_factor = rotary_interpolation_factor, base_rescale_factor = rotary_base_rescale_factor) if rotary_pos_emb else None
 
         assert not (alibi_pos_bias and rel_pos_bias), 'you can only choose Alibi positional bias or T5 relative positional bias, not both'
         assert rel_pos_num_buckets <= rel_pos_max_distance, 'number of relative position buckets must be less than the relative position max distance'
@@ -985,8 +996,17 @@ class AttentionLayers(nn.Module):
 
         self.cross_attend = cross_attend
 
-        norm_class = ScaleNorm if use_scalenorm else nn.LayerNorm
-        norm_class = RMSNorm if use_rmsnorm else norm_class
+        assert (int(use_scalenorm) + int(use_rmsnorm) + int(use_simple_rmsnorm)) <= 1, 'you can only use either scalenorm, rmsnorm, or simple rmsnorm'
+
+        if use_scalenorm:
+            norm_class = ScaleNorm
+        elif use_rmsnorm:
+            norm_class = RMSNorm
+        elif use_simple_rmsnorm:
+            norm_class = SimpleRMSNorm
+        else:
+            norm_class = nn.LayerNorm
+
         norm_fn = partial(norm_class, dim)
 
         if cross_attend and not only_cross:
@@ -1266,7 +1286,7 @@ class TransformerWrapper(nn.Module):
         max_seq_len,
         attn_layers,
         emb_dim = None,
-        max_mem_len = 0.,
+        max_mem_len = 0,
         shift_mem_down = 0,
         emb_dropout = 0.,
         post_emb_norm = False,
@@ -1431,6 +1451,7 @@ class ContinuousTransformerWrapper(nn.Module):
         dim_in = None,
         dim_out = None,
         emb_dim = None,
+        max_mem_len = 0,
         post_emb_norm = False,
         emb_dropout = 0.,
         use_abs_pos_emb = True,
@@ -1442,6 +1463,8 @@ class ContinuousTransformerWrapper(nn.Module):
         dim = attn_layers.dim
 
         self.max_seq_len = max_seq_len
+
+        self.max_mem_len = max_mem_len
 
         if not (use_abs_pos_emb and not attn_layers.has_pos_emb):
             self.pos_emb = always(0)
@@ -1464,6 +1487,7 @@ class ContinuousTransformerWrapper(nn.Module):
         x,
         return_embeddings = False,
         return_intermediates = False,
+        return_mems = False,
         mask = None,
         return_attn = False,
         mems = None,
@@ -1492,6 +1516,11 @@ class ContinuousTransformerWrapper(nn.Module):
 
         if return_intermediates:
             return out, intermediates
+
+        if return_mems:
+            hiddens = intermediates.hiddens
+            new_mems = list(map(lambda t: t[..., -self.max_mem_len:, :].detach(), hiddens))
+            return out, new_mems
 
         if return_attn:
             attn_maps = list(map(lambda t: t.post_softmax_attn, intermediates.attn_intermediates))
