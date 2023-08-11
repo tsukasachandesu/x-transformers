@@ -1120,7 +1120,7 @@ class AttentionLayers(nn.Module):
         context_mask = None,
         attn_mask = None,
         self_attn_context_mask = None,
-        bar = None, 
+        bar, 
         mems = None,
         return_hiddens = False
     ):
