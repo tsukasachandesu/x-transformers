@@ -1124,7 +1124,6 @@ class AttentionLayers(nn.Module):
         return_hiddens = False
     ):
         assert not (self.cross_attend ^ exists(context)), 'context must be passed in if cross_attend is set to True'
-        print(z.shape)
         hiddens = []
         intermediates = []
         prev_attn = None
