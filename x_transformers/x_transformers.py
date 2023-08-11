@@ -260,8 +260,8 @@ class RelativePositionBias(nn.Module):
         return next(self.parameters()).device
 
     def forward(self, i, j):
-        print(i.shape)
-        print(j.shape)
+        print(i)
+        print(j)
 
         device = self.device
         q_pos = torch.arange(j - i, j, dtype = torch.long, device = device)
