@@ -840,7 +840,7 @@ class Attention(nn.Module):
             final_attn_mask = ~or_reduce(masks)
 
         # prepare relative positional bias, if needed
-
+        attn_bias1 = None
         attn_bias = None
         if exists(rel_pos):
             attn_bias = rel_pos(z, z)
