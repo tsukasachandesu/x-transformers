@@ -744,7 +744,7 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x,z = None,
+        x,z = None,zz = None,
         context = None,
         mask = None,
         context_mask = None,
@@ -844,13 +844,14 @@ class Attention(nn.Module):
         attn_bias = None
         if exists(rel_pos):
             attn_bias = rel_pos(z, z)
+            attn_bias1 = rel_pos(zz, zz)
 
         # attention is all we need
 
         out, intermediates = self.attend(
             q, k, v,
             mask = final_attn_mask,
-            attn_bias = attn_bias,
+            attn_bias = attn_bias,attn_bias1 = attn_bias1,
             prev_attn = prev_attn
         )
 
@@ -1115,7 +1116,7 @@ class AttentionLayers(nn.Module):
 
     def forward(
         self,
-        x,z =None,
+        x,z =None,zz = None,
         y = None,
         context = None,
         mask = None,
@@ -1165,7 +1166,7 @@ class AttentionLayers(nn.Module):
             if layer_type == 'a':
                 if y != None:
                     x += y
-                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem,z =z)
+                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem,z =z,zz=zz)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
