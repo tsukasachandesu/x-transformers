@@ -959,7 +959,6 @@ class AttentionLayers(nn.Module):
         # relative positional bias
 
         flash_attn = attn_kwargs.get('flash', False)
-        assert (int(rel_pos_bias) + int(dynamic_pos_bias) + int(alibi_pos_bias)) <= 1, 'you can only choose up to one of t5, alibi, or dynamic positional bias'
 
         self.rel_pos = None
         if rel_pos_bias:
