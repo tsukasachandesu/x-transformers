@@ -361,9 +361,6 @@ class AlibiPositionalBias(nn.Module):
     def forward(self, i, j):
         h, device = self.total_heads, self.device
 
-        if exists(self.bias) and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
-            return self.bias[..., :i, :j]
-
         bias = self.get_bias(i, j, device)
         print(bias.shape)
         print(self.slopes.shape)
