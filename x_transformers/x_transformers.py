@@ -403,10 +403,10 @@ class AlibiPositionalBias1(nn.Module):
     def device(self):
         return next(self.buffers()).device
 
-    def forward(self, i, j):
+    def forward(self, i):
         h, device = self.total_heads, self.device
 
-        bias = self.get_bias(i, j, device)
+        bias = self.get_bias(i, device)
         bias = bias * self.slopes
         print(bias.shape)
         
