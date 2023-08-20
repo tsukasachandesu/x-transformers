@@ -9,7 +9,7 @@ from functools import partial, wraps
 from inspect import isfunction
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import List
+from typing import List, Callable
 
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
@@ -64,6 +64,9 @@ class equals():
         self.val = val
     def __call__(self, x, *args, **kwargs):
         return x == self.val
+
+def Sequential(*modules):
+    return nn.Sequential(*filter(exists, modules))
 
 # tensor helpers
 
@@ -261,14 +264,12 @@ class RelativePositionBias(nn.Module):
 
     def forward(self, i, j):
         device = self.device
-        q_pos = i
-        k_pos = j
-        rel_pos = k_pos[:,None, :] - q_pos[:,:, None]
+        q_pos = torch.arange(j - i, j, dtype = torch.long, device = device)
+        k_pos = torch.arange(j, dtype = torch.long, device = device)
+        rel_pos = k_pos[None, :] - q_pos[:, None]
         rp_bucket = self._relative_position_bucket(rel_pos, causal = self.causal, num_buckets = self.num_buckets, max_distance = self.max_distance)
         values = self.relative_attention_bias(rp_bucket)
-
-        bias = rearrange(values, 'b i j h ->b h i j')
-
+        bias = rearrange(values, 'i j h -> h i j')
         return bias * self.scale
 
 class DynamicPositionBias(nn.Module):
@@ -279,16 +280,16 @@ class DynamicPositionBias(nn.Module):
 
         self.mlp = nn.ModuleList([])
 
-        self.mlp.append(nn.Sequential(
+        self.mlp.append(Sequential(
             nn.Linear(1, dim),
-            nn.LayerNorm(dim) if norm else nn.Identity(),
+            nn.LayerNorm(dim) if norm else None,
             nn.SiLU()
         ))
 
         for _ in range(depth - 1):
-            self.mlp.append(nn.Sequential(
+            self.mlp.append(Sequential(
                 nn.Linear(dim, dim),
-                nn.LayerNorm(dim) if norm else nn.Identity(),
+                nn.LayerNorm(dim) if norm else None,
                 nn.SiLU()
             ))
 
@@ -368,33 +369,9 @@ class AlibiPositionalBias(nn.Module):
 
         num_heads_unalibied = h - bias.shape[0]
         bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 0)
-        
         self.register_buffer('bias', bias, persistent = False)
 
         return self.bias
-
-class LearnedAlibiPositionalBias(AlibiPositionalBias):
-    def __init__(self, heads, total_heads):
-        super().__init__(heads, total_heads)
-        log_slopes = torch.log(self.slopes)
-        self.learned_logslopes = nn.Parameter(log_slopes)
-
-    def forward(self, i, j):
-        h, device = self.heads, self.device
-
-        def get_slopes(param):
-            return pad_at_dim(param.exp(), (0, h - param.shape[0]), dim = -2)
-
-        if exists(self.bias) and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
-            bias = self.bias[..., :i, :j]
-        else:
-            bias = self.get_bias(i, j, device)
-            self.register_buffer('bias', bias, persistent = False)
-
-        slopes = get_slopes(self.learned_logslopes)
-        bias = bias * slopes
-
-        return bias
 
 class RotaryEmbedding(nn.Module):
     def __init__(
@@ -432,7 +409,6 @@ class RotaryEmbedding(nn.Module):
         t = t / self.interpolation_factor
 
         freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
-
         freqs = torch.cat((freqs, freqs), dim = -1)
 
         if not exists(self.scale):
@@ -566,14 +542,21 @@ class ShiftTokens(nn.Module):
 # feedforward
 
 class GLU(nn.Module):
-    def __init__(self, dim_in, dim_out, activation):
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        activation: Callable,
+        mult_bias = False
+    ):
         super().__init__()
         self.act = activation
         self.proj = nn.Linear(dim_in, dim_out * 2)
+        self.mult_bias = nn.Parameter(torch.ones(dim_out)) if mult_bias else 1.
 
     def forward(self, x):
         x, gate = self.proj(x).chunk(2, dim = -1)
-        return x * self.act(gate)
+        return x * self.act(gate) * self.mult_bias
 
 class FeedForward(nn.Module):
     def __init__(
@@ -582,6 +565,7 @@ class FeedForward(nn.Module):
         dim_out = None,
         mult = 4,
         glu = False,
+        glu_mult_bias = False,
         swish = False,
         relu_squared = False,
         post_act_ln = False,
@@ -600,14 +584,17 @@ class FeedForward(nn.Module):
         else:
             activation = nn.GELU()
 
-        project_in = nn.Sequential(
-            nn.Linear(dim, inner_dim, bias = not no_bias),
-            activation
-        ) if not glu else GLU(dim, inner_dim, activation)
+        if glu:
+            project_in = GLU(dim, inner_dim, activation, mult_bias = glu_mult_bias)
+        else:
+            project_in = nn.Sequential(
+                nn.Linear(dim, inner_dim, bias = not no_bias),
+                activation
+            )
 
-        self.ff = nn.Sequential(
+        self.ff = Sequential(
             project_in,
-            nn.LayerNorm(inner_dim) if post_act_ln else nn.Identity(),
+            nn.LayerNorm(inner_dim) if post_act_ln else None,
             nn.Dropout(dropout),
             nn.Linear(inner_dim, dim_out, bias = not no_bias)
         )
@@ -615,7 +602,6 @@ class FeedForward(nn.Module):
         # init last linear layer to 0
         if zero_init_output:
             init_zero_(self.ff[-1])
-
 
     def forward(self, x):
         return self.ff(x)
@@ -744,7 +730,7 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x,z = None,zz = None,
+        x,
         context = None,
         mask = None,
         context_mask = None,
@@ -840,18 +826,17 @@ class Attention(nn.Module):
             final_attn_mask = ~or_reduce(masks)
 
         # prepare relative positional bias, if needed
-        attn_bias1 = None
+
         attn_bias = None
         if exists(rel_pos):
-            attn_bias = rel_pos(z, z)
-            attn_bias1 = rel_pos(zz, zz)
+            attn_bias = rel_pos(i, j)
 
         # attention is all we need
 
         out, intermediates = self.attend(
             q, k, v,
             mask = final_attn_mask,
-            attn_bias = attn_bias,attn_bias1 = attn_bias1,
+            attn_bias = attn_bias,
             prev_attn = prev_attn
         )
 
@@ -899,7 +884,6 @@ class AttentionLayers(nn.Module):
         use_simple_rmsnorm = False,
         alibi_pos_bias = False,
         alibi_num_heads = None,
-        alibi_learned = False,
         rel_pos_bias = False,
         rel_pos_num_buckets = 32,
         rel_pos_max_distance = 128,
@@ -953,11 +937,13 @@ class AttentionLayers(nn.Module):
         assert not (rotary_xpos and not causal), 'rotary xpos is not compatible with bidirectional attention'
         self.rotary_pos_emb = RotaryEmbedding(rotary_emb_dim, use_xpos = rotary_xpos, scale_base = rotary_xpos_scale_base, interpolation_factor = rotary_interpolation_factor, base_rescale_factor = rotary_base_rescale_factor) if rotary_pos_emb else None
 
+        assert not (alibi_pos_bias and rel_pos_bias), 'you can only choose Alibi positional bias or T5 relative positional bias, not both'
         assert rel_pos_num_buckets <= rel_pos_max_distance, 'number of relative position buckets must be less than the relative position max distance'
 
         # relative positional bias
 
         flash_attn = attn_kwargs.get('flash', False)
+        assert (int(rel_pos_bias) + int(dynamic_pos_bias) + int(alibi_pos_bias)) <= 1, 'you can only choose up to one of t5, alibi, or dynamic positional bias'
 
         self.rel_pos = None
         if rel_pos_bias:
@@ -969,8 +955,7 @@ class AttentionLayers(nn.Module):
         elif alibi_pos_bias:
             alibi_num_heads = default(alibi_num_heads, heads)
             assert alibi_num_heads <= heads, 'number of ALiBi heads must be less than the total number of heads'
-            alibi_pos_klass = LearnedAlibiPositionalBias if alibi_learned else AlibiPositionalBias
-            self.rel_pos = alibi_pos_klass(heads = alibi_num_heads, total_heads = heads)
+            self.rel_pos = AlibiPositionalBias(heads = alibi_num_heads, total_heads = heads)
 
         # determine deepnorm and residual scale
 
@@ -1070,7 +1055,6 @@ class AttentionLayers(nn.Module):
 
         # iterate and construct layers
 
-        
         for ind, (layer_type, layer_shift_tokens) in enumerate(zip(self.layer_types, shift_tokens)):
             is_last_layer = ind == (len(self.layer_types) - 1)
 
@@ -1114,8 +1098,7 @@ class AttentionLayers(nn.Module):
 
     def forward(
         self,
-        x,z =None,zz = None,
-        y = None,
+        x,
         context = None,
         mask = None,
         context_mask = None,
@@ -1125,6 +1108,7 @@ class AttentionLayers(nn.Module):
         return_hiddens = False
     ):
         assert not (self.cross_attend ^ exists(context)), 'context must be passed in if cross_attend is set to True'
+
         hiddens = []
         intermediates = []
         prev_attn = None
@@ -1136,11 +1120,11 @@ class AttentionLayers(nn.Module):
         if exists(self.rotary_pos_emb):
             max_rotary_emb_length = max(list(map(lambda m: (m.shape[1] if exists(m) else 0) + x.shape[1], mems)))
             rotary_pos_emb = self.rotary_pos_emb(max_rotary_emb_length, x.device)
+
         outer_residual = x * self.resi_dual_scale
 
         for ind, (layer_type, (norm, block, residual_fn), layer_dropout) in enumerate(zip(self.layer_types, self.layers, self.layer_dropouts)):
             is_last = ind == (len(self.layers) - 1)
-            
 
             if self.training and layer_dropout > 0. and random() < layer_dropout:
                 continue
@@ -1162,9 +1146,7 @@ class AttentionLayers(nn.Module):
                 x = pre_norm(x)
 
             if layer_type == 'a':
-                if y != None:
-                    x += y
-                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem,z =z,zz=zz)
+                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
@@ -1227,7 +1209,6 @@ class ViTransformerWrapper(nn.Module):
         attn_layers,
         channels = 3,
         num_classes = None,
-        dropout = 0.,
         post_emb_norm = False,
         emb_dropout = 0.
     ):
