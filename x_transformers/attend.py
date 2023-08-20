@@ -251,6 +251,9 @@ class Attend(nn.Module):
 
         if self.talking_heads:
             dots = self.pre_softmax_talking_heads(dots)
+            
+        print(attn_bias.shape)
+        print(attn_bias.shape)
 
         if exists(attn_bias):
             dots = dots + attn_bias
