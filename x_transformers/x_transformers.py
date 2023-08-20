@@ -998,7 +998,7 @@ class AttentionLayers(nn.Module):
         elif alibi_pos_bias:
             alibi_num_heads = default(alibi_num_heads, heads)
             assert alibi_num_heads <= heads, 'number of ALiBi heads must be less than the total number of heads'
-            self.rel_pos = AlibiPositionalBias(heads = alibi_num_heads, total_heads = heads)
+            self.rel_pos = AlibiPositionalBias1(heads = alibi_num_heads, total_heads = heads)
 
         # determine deepnorm and residual scale
 
