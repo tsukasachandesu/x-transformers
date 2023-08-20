@@ -362,14 +362,10 @@ class AlibiPositionalBias(nn.Module):
         h, device = self.total_heads, self.device
 
         bias = self.get_bias(i, j, device)
-        print(bias.shape)
-        print(self.slopes.shape)
-
         bias = bias * self.slopes
 
         num_heads_unalibied = h - bias.shape[0]
         bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 0)
-        print(bias.shape)
 
         self.register_buffer('bias', bias, persistent = False)
 
@@ -380,14 +376,10 @@ class AlibiPositionalBias1(nn.Module):
         super().__init__()
         self.heads = heads
         self.total_heads = total_heads
-
-        slopes = Tensor(self._get_slopes(heads))
-        slopes = rearrange(slopes, 'h -> h 1 1')
-        self.register_buffer('slopes', slopes, persistent = False)
         self.register_buffer('bias', None, persistent = False)
     
     def get_bias(self, i, device):
-        bias = -torch.abs(rearrange(i, 'h j -> h 1 j') - rearrange(i, 'h i -> h i 1'))
+        bias = -torch.abs(rearrange(i, 'h j -> h 1 1 j') - rearrange(i, 'h i -> h 1 i 1'))
         return bias
 
     @staticmethod
@@ -410,8 +402,14 @@ class AlibiPositionalBias1(nn.Module):
     def forward(self, i):
         h, device = self.total_heads, self.device
 
+        slopes = Tensor(self._get_slopes(self.heads))
+        slopes = rearrange(slopes, 'h -> 1 h 1 1')
+        
         bias = self.get_bias(i, device)
-        bias = bias * self.slopes
+        bias = bias * slopes
+        
+        num_heads_unalibied = h - bias.shape[1]
+        bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 1)
         
         self.register_buffer('bias', bias, persistent = False)
 
@@ -998,7 +996,7 @@ class AttentionLayers(nn.Module):
         elif alibi_pos_bias:
             alibi_num_heads = default(alibi_num_heads, heads)
             assert alibi_num_heads <= heads, 'number of ALiBi heads must be less than the total number of heads'
-            self.rel_pos = AlibiPositionalBias(heads = alibi_num_heads, total_heads = heads)
+            self.rel_pos = AlibiPositionalBias1(heads = alibi_num_heads, total_heads = heads)
 
         # determine deepnorm and residual scale
 
