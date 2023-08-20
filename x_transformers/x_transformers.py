@@ -373,6 +373,50 @@ class AlibiPositionalBias(nn.Module):
 
         return self.bias
 
+class AlibiPositionalBias1(nn.Module):
+    def __init__(self, heads, total_heads, **kwargs):
+        super().__init__()
+        self.heads = heads
+        self.total_heads = total_heads
+
+        slopes = Tensor(self._get_slopes(heads))
+        slopes = rearrange(slopes, 'h -> h 1 1')
+        self.register_buffer('slopes', slopes, persistent = False)
+        self.register_buffer('bias', None, persistent = False)
+    
+    def get_bias(self, i, device):
+        bias = -torch.abs(rearrange(i, 'j -> 1 1 j') - rearrange(i, 'i -> 1 i 1'))
+        return bias
+
+    @staticmethod
+    def _get_slopes(heads):
+        def get_slopes_power_of_2(n):
+            start = (2**(-2**-(math.log2(n)-3)))
+            ratio = start
+            return [start*ratio**i for i in range(n)]
+
+        if math.log2(heads).is_integer():
+            return get_slopes_power_of_2(heads)
+
+        closest_power_of_2 = 2 ** math.floor(math.log2(heads))
+        return get_slopes_power_of_2(closest_power_of_2) + get_slopes_power_of_2(2 * closest_power_of_2)[0::2][:heads-closest_power_of_2]
+
+    @property
+    def device(self):
+        return next(self.buffers()).device
+
+    def forward(self, i):
+        h, device = self.total_heads, self.device
+
+        bias = self.get_bias(i, device)
+        bias = bias * self.slopes
+
+        num_heads_unalibied = h - bias.shape[0]
+        bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 0)
+        self.register_buffer('bias', bias, persistent = False)
+
+        return self.bias
+
 class RotaryEmbedding(nn.Module):
     def __init__(
         self,
@@ -730,7 +774,7 @@ class Attention(nn.Module):
 
     def forward(
         self,
-        x,
+        x, y, z,
         context = None,
         mask = None,
         context_mask = None,
@@ -827,9 +871,7 @@ class Attention(nn.Module):
 
         # prepare relative positional bias, if needed
 
-        attn_bias = None
-        if exists(rel_pos):
-            attn_bias = rel_pos(i, j)
+        attn_bias = AlibiPositionalBias1(y) + AlibiPositionalBias1(z)
 
         # attention is all we need
 
@@ -1098,7 +1140,7 @@ class AttentionLayers(nn.Module):
 
     def forward(
         self,
-        x,
+        x,y,z,
         context = None,
         mask = None,
         context_mask = None,
@@ -1146,7 +1188,7 @@ class AttentionLayers(nn.Module):
                 x = pre_norm(x)
 
             if layer_type == 'a':
-                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem)
+                out, inter = block(x, mask = mask, context_mask = self_attn_context_mask, attn_mask = attn_mask, rel_pos = self.rel_pos, rotary_pos_emb = rotary_pos_emb, prev_attn = prev_attn, mem = layer_mem, y = y, z = z)
             elif layer_type == 'c':
                 out, inter = block(x, context = context, mask = mask, context_mask = context_mask, prev_attn = prev_cross_attn)
             elif layer_type == 'f':
