@@ -683,7 +683,7 @@ class Attention(nn.Module):
     ):
         super().__init__()
         self.scale = dim_head ** -0.5
-
+ 
         self.heads = heads
         self.causal = causal
         self.max_attend_past = max_attend_past
@@ -870,8 +870,9 @@ class Attention(nn.Module):
             final_attn_mask = ~or_reduce(masks)
 
         # prepare relative positional bias, if needed
-
-        attn_bias = AlibiPositionalBias1(y) + AlibiPositionalBias1(z)
+        attn_bias = None
+        if exists(rel_pos):
+            attn_bias = rel_pos(y)+rel_pos(z)
 
         # attention is all we need
 
