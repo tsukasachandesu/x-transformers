@@ -173,6 +173,7 @@ class Attend(nn.Module):
         # convert from bool to float
 
         if exists(attn_bias):
+            attn_bias = rearrange(attn_bias, 'h i j -> 1 h i j').expand(batch, heads, -1, -1)
 
             # if mask given, the mask would already contain the causal mask from above logic
             # otherwise, if no mask given but still causal, mask out alibi positional bias to a large negative number
@@ -211,7 +212,7 @@ class Attend(nn.Module):
         self,
         q, k, v,
         mask = None,
-        attn_bias = None,attn_bias1 = None,
+        attn_bias = None,
         prev_attn = None
     ):
         """
@@ -247,12 +248,12 @@ class Attend(nn.Module):
             dots = dots + prev_attn
 
         qk_similarities = dots.clone()
-        
+
         if self.talking_heads:
             dots = self.pre_softmax_talking_heads(dots)
 
         if exists(attn_bias):
-            dots = dots + attn_bias + attn_bias1
+            dots = dots + attn_bias
 
         i, j, dtype = *dots.shape[-2:], dots.dtype
         pre_softmax_attn = dots.clone()
