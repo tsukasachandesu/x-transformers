@@ -376,10 +376,14 @@ class AlibiPositionalBias1(nn.Module):
         super().__init__()
         self.heads = heads
         self.total_heads = total_heads
+
+        slopes = Tensor(self._get_slopes(heads))
+        slopes = rearrange(slopes, 'h -> 1 h 1 1')
+        self.register_buffer('slopes', slopes, persistent = False)
         self.register_buffer('bias', None, persistent = False)
     
     def get_bias(self, i, device):
-        bias = -torch.abs(rearrange(i, 'h j -> h 1 1 j') - rearrange(i, 'h i -> h 1 i 1'))
+        bias = -torch.abs(rearrange(b i, 'j ->b 1 1 j') - rearrange(b i, 'b i -> b 1 i 1'))
         return bias
 
     @staticmethod
@@ -399,21 +403,21 @@ class AlibiPositionalBias1(nn.Module):
     def device(self):
         return next(self.buffers()).device
 
-    def forward(self, i):
+    def forward(self, i, j):
         h, device = self.total_heads, self.device
 
-        slopes = Tensor(self._get_slopes(self.heads))
-        slopes = rearrange(slopes, 'h -> 1 h 1 1')
+        bias = self.get_bias(i, j, device)
+        bias = bias * self.slopes
+        print(bias.shape)
         
-        bias = self.get_bias(i, device)
-        bias = bias * slopes
-        
-        num_heads_unalibied = h - bias.shape[1]
+        num_heads_unalibied = h - bias.shape[0]
         bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 1)
-        
+        print(bias.shape)
+
         self.register_buffer('bias', bias, persistent = False)
 
         return self.bias
+
 
 class RotaryEmbedding(nn.Module):
     def __init__(
