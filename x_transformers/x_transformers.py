@@ -365,10 +365,15 @@ class AlibiPositionalBias(nn.Module):
             return self.bias[..., :i, :j]
 
         bias = self.get_bias(i, j, device)
+        print(bias.shape)
+        print(self.slopes.shape)
+
         bias = bias * self.slopes
 
         num_heads_unalibied = h - bias.shape[0]
         bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 0)
+        print(bias.shape)
+
         self.register_buffer('bias', bias, persistent = False)
 
         return self.bias
@@ -870,7 +875,8 @@ class Attention(nn.Module):
         # prepare relative positional bias, if needed
         attn_bias = None
         if exists(rel_pos):
-            attn_bias = rel_pos(y)+rel_pos(z)
+            attn_bias = rel_pos(i,j)
+            print(attn_bias.shape)
 
         # attention is all we need
 
@@ -996,7 +1002,7 @@ class AttentionLayers(nn.Module):
         elif alibi_pos_bias:
             alibi_num_heads = default(alibi_num_heads, heads)
             assert alibi_num_heads <= heads, 'number of ALiBi heads must be less than the total number of heads'
-            self.rel_pos = AlibiPositionalBias1(heads = alibi_num_heads, total_heads = heads)
+            self.rel_pos = AlibiPositionalBias(heads = alibi_num_heads, total_heads = heads)
 
         # determine deepnorm and residual scale
 
