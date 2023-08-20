@@ -876,7 +876,6 @@ class Attention(nn.Module):
         attn_bias = None
         if exists(rel_pos):
             attn_bias = rel_pos(i,j)
-            print(attn_bias.shape)
 
         # attention is all we need
 
