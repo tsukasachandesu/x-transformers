@@ -385,7 +385,7 @@ class AlibiPositionalBias1(nn.Module):
         self.register_buffer('bias', None, persistent = False)
     
     def get_bias(self, i, device):
-        bias = -torch.abs(rearrange(i, 'j -> 1 1 j') - rearrange(i, 'i -> 1 i 1'))
+        bias = -torch.abs(rearrange(i, 'h j -> h 1 j') - rearrange(i, 'h i -> h i 1'))
         return bias
 
     @staticmethod
@@ -410,9 +410,7 @@ class AlibiPositionalBias1(nn.Module):
 
         bias = self.get_bias(i, device)
         bias = bias * self.slopes
-
-        num_heads_unalibied = h - bias.shape[0]
-        bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 0)
+        
         self.register_buffer('bias', bias, persistent = False)
 
         return self.bias
