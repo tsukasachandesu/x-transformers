@@ -378,7 +378,7 @@ class AlibiPositionalBias1(nn.Module):
         self.total_heads = total_heads
 
         slopes = Tensor(self._get_slopes(heads))
-        slopes = rearrange(slopes, 'h -> h 1 1')
+        slopes = rearrange(slopes, 'h -> 1 h 1 1')
         self.register_buffer('slopes', slopes, persistent = False)
         self.register_buffer('bias', None, persistent = False)
     
@@ -407,10 +407,10 @@ class AlibiPositionalBias1(nn.Module):
         h, device = self.total_heads, self.device
 
         bias = self.get_bias(i, device)
+        slopes = self.slopes.repeat((bias.shape[0],1,1,1))
         print(bias.shape)
-        print(self.slopes.shape)
-
-        bias = bias * self.slopes
+        print(slopes.shape)
+        bias = bias * slopes
         print(bias.shape)
         
         num_heads_unalibied = h - bias.shape[1]
