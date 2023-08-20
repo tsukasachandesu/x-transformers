@@ -378,7 +378,7 @@ class AlibiPositionalBias1(nn.Module):
         self.total_heads = total_heads
 
         slopes = Tensor(self._get_slopes(heads))
-        slopes = rearrange(slopes, 'h -> 1 h 1 1')
+        slopes = rearrange(slopes, 'h -> h 1 1')
         self.register_buffer('slopes', slopes, persistent = False)
         self.register_buffer('bias', None, persistent = False)
     
@@ -413,7 +413,7 @@ class AlibiPositionalBias1(nn.Module):
         bias = bias * self.slopes
         print(bias.shape)
         
-        num_heads_unalibied = h - bias.shape[0]
+        num_heads_unalibied = h - bias.shape[1]
         bias = pad_at_dim(bias, (0, num_heads_unalibied), dim = 1)
         print(bias.shape)
 
