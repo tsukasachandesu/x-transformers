@@ -383,7 +383,7 @@ class AlibiPositionalBias1(nn.Module):
         self.register_buffer('bias', None, persistent = False)
     
     def get_bias(self, i, device):
-        bias = -torch.abs(rearrange(b i, 'j ->b 1 1 j') - rearrange(b i, 'b i -> b 1 i 1'))
+        bias = -torch.abs(rearrange(i, 'b j ->b 1 1 j') - rearrange(i, 'b i -> b 1 i 1'))
         return bias
 
     @staticmethod
